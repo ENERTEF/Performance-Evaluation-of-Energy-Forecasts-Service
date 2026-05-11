@@ -14,20 +14,24 @@ np.random.seed(42)
 timestamps = pd.date_range(start="2025-01-01 00:00", end="2025-05-31 23:00", freq="h")
 n_records = len(timestamps)
 
-# 2. Gerar condicoes ambientais base (comuns as 3 boias)
+# 2. Gerar condicoes ambientais base (comuns as todas as boias)
 base_wave_hs = np.random.normal(loc=2.5, scale=0.8, size=n_records).clip(0.5, 6.0)
 base_wave_tp = np.random.normal(loc=9.0, scale=1.5, size=n_records).clip(5.0, 15.0)
 base_wind_speed = np.random.normal(loc=15.0, scale=5.0, size=n_records).clip(0.0, 30.0)
 base_sst = np.random.normal(loc=14.5, scale=0.5, size=n_records)
 
-# 3. Definir as coordenadas das 3 boias (distanciadas em poucos km)
-buoys = {
-    'Boia_1': {'lat': 41.140, 'lon': -8.700},
-    'Boia_2': {'lat': 41.155, 'lon': -8.710},
-    'Boia_3': {'lat': 41.130, 'lon': -8.725}
-}
+# 3. Definir as coordenadas das 12 boias
+buoys = {}
+for i in range(1, 13):
+    # Gerar variacoes espaciais aleatorias em torno de um ponto central
+    lat = 41.140 + np.random.normal(0, 0.01)
+    lon = -8.700 + np.random.normal(0, 0.01)
+    buoys[f'Boia_{i}'] = {'lat': lat, 'lon': lon}
 
 mock_data = []
+
+# As 4 boias que vao falhar gravemente na Epoca 3
+failing_buoys = ['Boia_9', 'Boia_10', 'Boia_11', 'Boia_12']
 
 # 4. Gerar os dados especificos para cada boia
 for buoy_id, coords in buoys.items():
@@ -49,8 +53,8 @@ for buoy_id, coords in buoys.items():
     performance_multiplier[mask_epoch2] = 0.85
     
     # Epoca 3: Degradacao Especifica (15 a 31 de Maio).
-    if buoy_id == 'Boia_3':
-        performance_multiplier[mask_epoch3] = 0.45 # Boia 3 sofre anomalia grave
+    if buoy_id in failing_buoys:
+        performance_multiplier[mask_epoch3] = 0.45 # Boias falham com anomalia grave
     else:
         performance_multiplier[mask_epoch3] = 0.85 # Restantes mantem degradacao comum
         
@@ -100,7 +104,7 @@ for buoy_id, coords in buoys.items():
 # 5. Juntar tudo num unico dataset
 final_dataset = pd.concat(mock_data, ignore_index=True)
 
-# Exportar para CSV (Garantir que guarda dentro da pasta datasets para evitar erros de caminho)
+# Exportar para CSV
 csv_path = 'wec_c5_mock_data_epochs.csv'
 final_dataset.to_csv(csv_path, index=False)
 

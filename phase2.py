@@ -63,8 +63,16 @@ warnings.filterwarnings("ignore")
 TIMESTAMP_COL    = "PCTimeStamp"
 BUOY_ID_COL      = "Buoy_ID"
 TARGET_COL       = "Energy_Generation_kW"
-INPUT_COL        = "Wave_Power_Flux"
-EXPECTED_BUOYS   = ["Boia_1", "Boia_2", "Boia_3"]
+# Define the list of features to be used as Inputs in the DEA model.
+# Comment out a feature to exclude it from the multi-dimensional analysis.
+INPUT_COLS       = [
+    "Wave_Hs",
+    "Wave_Tp",
+    #"Wave_Power_Flux", 
+    "Wind_Speed"
+]
+
+EXPECTED_BUOYS   = [f"Boia_{i}" for i in range(1, 13)]
 
 DATA_CSV_PATH    = "datasets/wec_c5_mock_data_epochs.csv"
 PLOT_OUTPUT_PATH = "wec_phase2_dea.png"
@@ -106,8 +114,10 @@ def load_and_prepare(csv_path: str) -> pd.DataFrame:
     logger.info("Raw shape: %s", df.shape)
     logger.info("Buoys present: %s", df[BUOY_ID_COL].unique().tolist())
 
-    # Recalculate the composite input feature
-    df[INPUT_COL] = df["Wave_Hs"] ** 2 * df["Wave_Tp"]
+    # Ensure composite input feature exists if requested
+    if "Wave_Power_Flux" in INPUT_COLS and "Wave_Power_Flux" not in df.columns:
+        df["Wave_Power_Flux"] = df["Wave_Hs"] ** 2 * df["Wave_Tp"]
+
 
     # Identify numeric columns that require imputation
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
@@ -141,7 +151,7 @@ def build_timestamp_batches(df: pd.DataFrame) -> list[dict]:
     does not create spurious inefficiencies in the strict hourly DEA.
     """
     # Aplicar a mitigacao do Phase Shift (Media Movel de 3 horas por boia)
-    numeric_cols = [INPUT_COL, TARGET_COL]
+    numeric_cols = INPUT_COLS + [TARGET_COL]
     df_smoothed = df.copy()
     
     # Ordenar rigorosamente para o rolling funcionar
@@ -171,7 +181,9 @@ def build_timestamp_batches(df: pd.DataFrame) -> list[dict]:
 
         # Extract values in a consistent order
         rows = [group[group[BUOY_ID_COL] == b].iloc[0] for b in EXPECTED_BUOYS]
-        x_vals = np.array([r[INPUT_COL] for r in rows], dtype=float)
+        
+        # x_vals is now a 2D matrix: shape (n_buoys, m_inputs)
+        x_vals = np.array([[r[col] for col in INPUT_COLS] for r in rows], dtype=float)
         y_vals = np.array([r[TARGET_COL] for r in rows], dtype=float)
 
         # Guard against non-positive values (LP infeasibility)
@@ -270,17 +282,34 @@ def calculate_dea_efficiency(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     # distorcer a Fronteira de Possibilidades de Producao para as outras.
     y_clipped = np.clip(y, a_min=0.1, a_max=350.0)
 
+    # Determine the number of input dimensions (m)
+    m_inputs = x.shape[1] if x.ndim > 1 else 1
+    
+    # Reshape x to ensure it's always 2D for consistent indexing
+    x_matrix = x.reshape(n, m_inputs)
+
     for k in range(n):
-        # Input constraint row: [0, x_1, ..., x_n] <= x_k
-        row_input = np.zeros(1 + n)
-        row_input[1:] = x
+        # We need one constraint row per input dimension
+        input_rows = []
+        b_ub_list = []
+        
+        for i in range(m_inputs):
+            # Input constraint row for dimension i: sum_j(lambda_j * x_ji) <= x_ki
+            # Format: [0, x_1i, x_2i, ..., x_ni]
+            row_in = np.zeros(1 + n)
+            row_in[1:] = x_matrix[:, i]
+            input_rows.append(row_in)
+            b_ub_list.append(x_matrix[k, i])
+            
         # Output constraint row (using clipped Y): phi * y_k - sum_j lambda_j * y_j <= 0
         row_output = np.zeros(1 + n)
         row_output[0]  =  y_clipped[k]   # coefficient for phi
         row_output[1:] = -y_clipped      # coefficients for lambdas
 
-        A_ub = np.vstack([row_input, row_output])
-        b_ub = np.array([x[k], 0.0])
+        # Stack all input constraints and the output constraint vertically
+        A_ub = np.vstack(input_rows + [row_output])
+        b_ub = np.array(b_ub_list + [0.0])
+        
         result = linprog(
             c,
             A_ub=A_ub,
@@ -379,7 +408,10 @@ def aggregate_and_plot(df_results: pd.DataFrame, df_raw: pd.DataFrame) -> pd.Dat
     # PLOT 1: Time Series of DEA Efficiency
     # -----------------------------------------------------------------------
     fig1, ax1 = plt.subplots(figsize=(12, 6))
-    colors = {"Boia_1": "#2196F3", "Boia_2": "#4CAF50", "Boia_3": "#F44336"}
+    
+    # Gerar uma paleta de cores automaticamente para as N boias
+    palette = sns.color_palette("husl", len(EXPECTED_BUOYS))
+    colors = {buoy: color for buoy, color in zip(EXPECTED_BUOYS, palette)}
     
     for buoy in EXPECTED_BUOYS:
         roll_col = f"{buoy}_roll7D"
@@ -411,8 +443,15 @@ def aggregate_and_plot(df_results: pd.DataFrame, df_raw: pd.DataFrame) -> pd.Dat
     # PLOT 2: Production Possibility Frontier (Output vs Input)
     # -----------------------------------------------------------------------
     # Juntar os scores DEA com os valores brutos para poder plotar Input vs Output
+    # -----------------------------------------------------------------------
+    # PLOT 2: Production Possibility Frontier (Output vs Input)
+    # -----------------------------------------------------------------------
+    # For visualization, we plot against the primary/first input feature
+    primary_input = INPUT_COLS[0]
+    
+    # Juntar os scores DEA com os valores brutos para poder plotar Input vs Output
     df_frontier = pd.merge(
-        df_raw[[TIMESTAMP_COL, BUOY_ID_COL, INPUT_COL, TARGET_COL, "Epoch_Marker"]],
+        df_raw[[TIMESTAMP_COL, BUOY_ID_COL, primary_input, TARGET_COL, "Epoch_Marker"]],
         df_results,
         on=[TIMESTAMP_COL, BUOY_ID_COL],
         how="inner"
@@ -426,7 +465,7 @@ def aggregate_and_plot(df_results: pd.DataFrame, df_raw: pd.DataFrame) -> pd.Dat
     # Plotar todos os pontos da Época 3
     sns.scatterplot(
         data=df_epoch3, 
-        x=INPUT_COL, 
+        x=primary_input, 
         y=TARGET_COL, 
         hue=BUOY_ID_COL, 
         palette=colors,
@@ -436,24 +475,21 @@ def aggregate_and_plot(df_results: pd.DataFrame, df_raw: pd.DataFrame) -> pd.Dat
     )
 
     # Identificar e destacar a Fronteira Empírica (pontos onde DEA_Efficiency == 1)
-    # Uma pequena tolerância (0.99) devido a arredondamentos matemáticos do solver
-    frontier_points = df_epoch3[df_epoch3["DEA_Efficiency"] >= 0.99]
+    #frontier_points = df_epoch3[df_epoch3["DEA_Efficiency"] >= 0.99]
+    #frontier_points = frontier_points.sort_values(by=primary_input)
     
-    # Para desenhar a linha, ordenamos pelos valores de Input
-    frontier_points = frontier_points.sort_values(by=INPUT_COL)
-    
-    ax2.plot(
-        frontier_points[INPUT_COL], 
-        frontier_points[TARGET_COL], 
-        color='black', 
-        linestyle='-', 
-        linewidth=1.5,
-        label="Fronteira de Eficiência (DEA = 1.0)",
-        zorder=10
-    )
+    #ax2.plot(
+    #    frontier_points[primary_input], 
+    #    frontier_points[TARGET_COL], 
+    #    color='black', 
+    #    linestyle='-', 
+    #    linewidth=1.5,
+    #    label="Fronteira de Eficiência (DEA = 1.0)",
+    #    zorder=10
+    #)
 
     ax2.set_title("Data Envelopment Analysis: Fronteira de Produção (Época 3)", fontweight='bold')
-    ax2.set_xlabel("INPUT: Fluxo de Potência da Onda (Wave_Power_Flux)")
+    ax2.set_xlabel(f"INPUT 1: {primary_input}")
     ax2.set_ylabel("OUTPUT: Geração de Energia Real (kW)")
     ax2.legend()
     
@@ -485,7 +521,7 @@ def _print_degradation_summary(df_wide: pd.DataFrame) -> None:
         pre_mean  = pre[buoy].mean()
         post_mean = post[buoy].mean()
         delta     = post_mean - pre_mean
-        flag      = "  <<< DEGRADATION DETECTED" if delta < -0.15 else ""
+        flag      = "  <<< DEGRADATION DETECTED" if delta < -0.10 else ""
         logger.info(
             "%-10s | %18.4f | %18.4f | %+12.4f%s",
             buoy, pre_mean, post_mean, delta, flag,

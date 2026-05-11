@@ -31,9 +31,20 @@ def main():
     
     # A lista TEM de ser exatamente igual a FEATURE_COLS do phase1.py
     features = [
-        "Wave_Hs", "Wave_Tp", "Wave_Power_Flux", "Wave_Steepness", 
-        "Misalignment", "Wind_Power_Density", "Wind_Speed", "Current_Speed", 
-        "Wave_Dir", "Air_Temperature", "Atmospheric_Pressure", "hour", "month"
+        "Wave_Hs",
+        "Wave_Tp",
+        "Wave_Power_Flux",       # engineered feature
+        "Wave_Steepness",        # engineered feature
+        "Misalignment",          # engineered feature
+        "Wind_Power_Density",    # engineered feature
+        "Wind_Speed",
+        "Current_Speed",
+        "Wave_Dir",
+        "Air_Temperature",
+        "Atmospheric_Pressure",
+        # Temporal features
+        "hour",
+        "month",
     ]
     
     # Fazer o forecast (Analise Absoluta)
