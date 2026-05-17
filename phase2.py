@@ -66,15 +66,13 @@ TARGET_COL       = "Energy_Generation_kW"
 # Define the list of features to be used as Inputs in the DEA model.
 # Comment out a feature to exclude it from the multi-dimensional analysis.
 INPUT_COLS       = [
-    "Wave_Hs",
-    "Wave_Tp",
-    #"Wave_Power_Flux", 
-    "Wind_Speed"
+    "Wave_Power_Flux", 
+    "NumberOfWaves"
 ]
 
 EXPECTED_BUOYS   = [f"Boia_{i}" for i in range(1, 13)]
 
-DATA_CSV_PATH    = "datasets/wec_c5_mock_data_epochs.csv"
+DATA_CSV_PATH    = "dataset2/wec_c5_mock_data_epochs.csv"
 PLOT_OUTPUT_PATH = "wec_phase2_dea.png"
 
 # Degradation injection parameters for Boia_3 (used in synthetic data only)
@@ -116,7 +114,7 @@ def load_and_prepare(csv_path: str) -> pd.DataFrame:
 
     # Ensure composite input feature exists if requested
     if "Wave_Power_Flux" in INPUT_COLS and "Wave_Power_Flux" not in df.columns:
-        df["Wave_Power_Flux"] = df["Wave_Hs"] ** 2 * df["Wave_Tp"]
+        df["Wave_Power_Flux"] = 0.49 * (df["Hs__m"] ** 2) * df["Te__s"]
 
 
     # Identify numeric columns that require imputation
@@ -150,9 +148,12 @@ def build_timestamp_batches(df: pd.DataFrame) -> list[dict]:
     This ensures that wave travel time between buoys (up to 6km apart)
     does not create spurious inefficiencies in the strict hourly DEA.
     """
-    # Aplicar a mitigacao do Phase Shift (Media Movel de 3 horas por boia)
+    # Aplicar a mitigacao do Phase Shift (Media Movel de 6 horas por boia)
     numeric_cols = INPUT_COLS + [TARGET_COL]
     df_smoothed = df.copy()
+    
+    # NOVO: Converter explicitamente as colunas alvo para float para o Pandas aceitar a media movel
+    df_smoothed[numeric_cols] = df_smoothed[numeric_cols].astype(float)
     
     # Ordenar rigorosamente para o rolling funcionar
     df_smoothed = df_smoothed.sort_values([BUOY_ID_COL, TIMESTAMP_COL])
@@ -161,7 +162,7 @@ def build_timestamp_batches(df: pd.DataFrame) -> list[dict]:
         mask = df_smoothed[BUOY_ID_COL] == buoy
         df_smoothed.loc[mask, numeric_cols] = (
             df_smoothed.loc[mask, numeric_cols]
-            .rolling(window=3, min_periods=1)
+            .rolling(window=6, min_periods=1)
             .mean()
         )
 
@@ -552,35 +553,31 @@ def _generate_synthetic_data(seed: int = 42) -> pd.DataFrame:
     """
     rng = np.random.default_rng(seed)
 
-    timestamps = pd.date_range("2025-03-01", "2025-06-15", freq="1h")
+    timestamps = pd.date_range("2025-03-01", "2025-06-15", freq="30min")
     n = len(timestamps)
 
     rows = []
-    for buoy_id in EXPECTED_BUOYS:
-        # Shared sea-state variables (same conditions for all buoys per timestamp)
-        wave_hs   = rng.uniform(0.5, 5.0,  n)
-        wave_tp   = rng.uniform(4.0, 16.0, n)
-        wave_dir  = rng.uniform(180, 360,  n)
-        wind_spd  = rng.uniform(2.0, 20.0, n)
-        curr_spd  = rng.uniform(0.0, 1.5,  n)
-        wind_dir  = rng.uniform(0,   360,  n)
-        air_temp  = rng.uniform(10,  25,   n)
-        atm_press = rng.uniform(1000, 1025, n)
+    # Base physics simulation for the waverider variables
+    base_hs = rng.uniform(0.5, 5.0, n)
+    base_te = rng.uniform(4.0, 14.0, n)
+    base_num_waves = rng.normal(loc=250, scale=30, size=n).astype(int).clip(50, 500)
 
-        # Healthy output model: physics-informed (same as Phase 1 synthetic)
-        wave_power_flux = wave_hs ** 2 * wave_tp
-        noise  = rng.normal(0, 8, n)
-        energy = (0.85 * wave_power_flux + 1.5 * wind_spd + 5.0 * curr_spd + noise).clip(min=1.0)
+    for i, buoy_id in enumerate(EXPECTED_BUOYS):
+        
+        hs = np.roll(base_hs, shift=i) + rng.normal(0, 0.05, n)
+        te = np.roll(base_te, shift=i) + rng.normal(0, 0.2, n)
+        
+        wave_power_flux = 0.49 * (hs ** 2) * te
+        capture_width_ratio = 2.5
+        energy = (wave_power_flux * capture_width_ratio)
 
-        # Inject degradation for Boia_3 in Epoch 3
-        if buoy_id == "Boia_3":
+        # Inject degradation for the failing buoys in Epoch 3
+        if buoy_id in ['Boia_9', 'Boia_10', 'Boia_11', 'Boia_12']:
             deg_mask = timestamps >= DEGRADATION_START
             energy[deg_mask] *= DEGRADATION_FACTOR
-            # Add extra noise to degrade signal quality, simulating sensor drift
             energy[deg_mask] += rng.normal(0, 5, deg_mask.sum())
             energy = energy.clip(min=0.5)
 
-        # Epoch label (1, 2, 3) based on month
         epoch_markers = np.where(
             timestamps < "2025-04-01", 1,
             np.where(timestamps < "2025-05-01", 2, 3)
@@ -589,33 +586,24 @@ def _generate_synthetic_data(seed: int = 42) -> pd.DataFrame:
         df_buoy = pd.DataFrame({
             TIMESTAMP_COL:         timestamps,
             BUOY_ID_COL:           buoy_id,
-            "Buoy_Latitude":        41.14,
-            "Buoy_Longitude":      -8.7,
-            "SST":                  rng.uniform(13, 20, n),
-            "Salinity":             rng.uniform(34, 36, n),
-            "Conductivity":         rng.uniform(50, 56, n),
-            "Dissolved_Oxygen":     rng.uniform(7, 10, n),
-            "Turbidity":            rng.uniform(0.5, 5, n),
-            "Chlorophyll_a":        rng.uniform(0.5, 3, n),
-            "Wave_Hs":              wave_hs,
-            "Wave_Tp":              wave_tp,
-            "Wave_Dir":             wave_dir,
-            "Current_Speed":        curr_spd,
-            "Current_Dir":          rng.uniform(0, 360, n),
-            "Air_Temperature":      air_temp,
-            "Atmospheric_Pressure": atm_press,
-            "Relative_Humidity":    rng.uniform(60, 95, n),
-            "Solar_Radiation":      rng.uniform(0, 800, n),
-            "Wind_Speed":           wind_spd,
-            "Wind_Direction":       wind_dir,
-            "Rainfall":             rng.uniform(0, 5, n),
-            "Battery_Voltage":      rng.uniform(11, 14, n),
-            TARGET_COL:             energy,
-            "Epoch_Marker":         epoch_markers,
+            "Hs__m":               hs,
+            "Te__s":               te,
+            "H1/3__m":             hs * 1.05 + rng.normal(0, 0.05, n),
+            "H1/10__m":            hs * 1.27 + rng.normal(0, 0.05, n),
+            "Hmax__m":             hs * 1.7 + rng.normal(0, 0.1, n),
+            "HTmax__m":            hs * 1.5 + rng.normal(0, 0.1, n),
+            "Havg__m":             hs * 0.6 + rng.normal(0, 0.05, n),
+            "Hsms__m":             hs * 1.1 + rng.normal(0, 0.05, n),
+            "NumberOfWaves":       np.roll(base_num_waves, shift=i) + rng.integers(-10, 10, n),
+            "THmax__s":            te * 1.2 + rng.normal(0, 0.5, n),
+            "Tavg__s":             te * 0.8 + rng.normal(0, 0.2, n),
+            "Tmax__s":             te * 1.5 + rng.normal(0, 0.5, n),
+            TARGET_COL:            energy.clip(0, 350),
+            "Epoch_Marker":        epoch_markers,
         })
 
-        # Randomly insert ~2% missing values to validate imputation
-        for col in ["Wave_Hs", "Wave_Tp", "Wind_Speed", TARGET_COL]:
+        # Randomly insert ~2% missing values
+        for col in ["Hs__m", "Te__s", TARGET_COL]:
             mask = rng.random(n) < 0.02
             df_buoy.loc[mask, col] = np.nan
 

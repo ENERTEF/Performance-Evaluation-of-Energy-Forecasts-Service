@@ -9,14 +9,16 @@ sns.set_context("paper", font_scale=1.0)
 
 def main():
     print("A carregar os dados e a calcular as medias por epoca...")
-    df = pd.read_csv("datasets/wec_c5_mock_data_epochs.csv")
+    # Usar o novo caminho garantido para o dataset
+    df = pd.read_csv("dataset2/wec_c5_mock_data_epochs.csv")
 
-    # 1. Recriar a feature de Input Principal
+    # 1. Recriar a feature de Input Principal com a nova formula fisica
     if "Wave_Power_Flux" not in df.columns:
-        df["Wave_Power_Flux"] = df["Wave_Hs"] ** 2 * df["Wave_Tp"]
+        df["Wave_Power_Flux"] = 0.49 * (df["Hs__m"] ** 2) * df["Te__s"]
 
     # 2. Calcular o ponto medio de operacao de cada boia por epoca
-    df_agg = df.groupby(["Epoch_Marker", "Buoy_ID"])[["Wave_Power_Flux", "Wind_Speed", "Energy_Generation_kW"]].mean().reset_index()
+    # Substituir Wind_Speed por NumberOfWaves para refletir o novo modelo 2D do DEA
+    df_agg = df.groupby(["Epoch_Marker", "Buoy_ID"])[["Wave_Power_Flux", "NumberOfWaves", "Energy_Generation_kW"]].mean().reset_index()
 
     # 3. Preparar a Figura 3D com 3 subgraficos (lado a lado)
     fig = plt.figure(figsize=(18, 6))
@@ -34,7 +36,7 @@ def main():
         for _, row in df_ep.iterrows():
             buoy = row["Buoy_ID"]
             x_val = row["Wave_Power_Flux"]
-            y_val = row["Wind_Speed"]
+            y_val = row["NumberOfWaves"] # Eixo Y e agora o Numero de Ondas
             z_val = row["Energy_Generation_kW"]
             
             # Ponto principal
@@ -49,26 +51,25 @@ def main():
             )
             
             # Linha vertical (Stem) ligando o ponto ao chao (z=0)
-            # Ajuda a perceber a quebra de producao visualmente
             ax.plot([x_val, x_val], [y_val, y_val], [0, z_val], color=colors[buoy], linestyle=':', alpha=0.5)
 
         # Formatacao dos eixos
         ax.set_title(f"Epoca {epoch}", fontweight='bold', fontsize=14)
         ax.set_xlabel("Input 1: Wave Power Flux")
-        ax.set_ylabel("Input 2: Wind Speed")
+        ax.set_ylabel("Input 2: Number Of Waves")
         ax.set_zlabel("Output: Geracao (kW)")
         
-        # Limites dinâmicos: O gráfico faz "zoom in" exato aos dados disponíveis
-        # Calculamos os limites globais usando df_agg para garantir que as 3 épocas partilham a mesma escala
+        # Limites dinamicos: O grafico faz "zoom in" exato aos dados disponiveis
+        # Calculamos os limites globais usando df_agg para garantir que as 3 epocas partilham a mesma escala
         x_min, x_max = df_agg["Wave_Power_Flux"].min(), df_agg["Wave_Power_Flux"].max()
-        y_min, y_max = df_agg["Wind_Speed"].min(), df_agg["Wind_Speed"].max()
+        y_min, y_max = df_agg["NumberOfWaves"].min(), df_agg["NumberOfWaves"].max()
         z_max = df_agg["Energy_Generation_kW"].max()
 
-        # Aplicar margens de 5% para os pontos não colarem às paredes do gráfico
+        # Aplicar margens de 5% para os pontos nao colarem as paredes do grafico
         ax.set_xlim(x_min * 0.95, x_max * 1.05)
         ax.set_ylim(y_min * 0.95, y_max * 1.05)
         
-        # O eixo Z (Energia) convém começar sempre no 0 para que a percepção visual da quebra de 45% seja real
+        # O eixo Z (Energia) convem comecar sempre no 0 para que a percepcao visual da quebra seja real
         ax.set_zlim(0, z_max * 1.10)
         
         # Angulo de visualizacao (Elevacao e Azimute)
