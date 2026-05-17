@@ -92,30 +92,53 @@ def main():
          "Predicted_Energy_P10", "Predicted_Energy_P90"]
     ].resample("D").mean()
 
-    ax2.fill_between(
-        df_b9_daily.index,
-        df_b9_daily["Predicted_Energy_P10"],
-        df_b9_daily["Predicted_Energy_P90"],
-        color="#2ecc71", alpha=0.2,
-        label="Intervalo Confianca (+/-1.28 RMSE)",
-    )
-    ax2.plot(
-        df_b9_daily.index, df_b9_daily["Predicted_Energy_kW"],
-        label="Forecast (Gemeo Digital)", color="#27ae60", linestyle="--",
-    )
+    # 1. Plotar a linha real (vermelha) para TODO o periodo
     ax2.plot(
         df_b9_daily.index, df_b9_daily["Energy_Generation_kW"],
         label="Producao Real", color="#e74c3c", linewidth=2,
     )
 
-    ax2.axvline(pd.to_datetime("2025-05-01"),  color="gray", linestyle=":", alpha=0.7)
+    # 2. Encontrar o ponto de corte estatistico (80% / 20%)
+    # Nos dados que vao ate 31 de Maio, os 80% recaem exatamante no dia 1 de Maio
+    split_date = pd.to_datetime("2025-05-01") 
+
+    # 3. Separar os dados In-Sample e Out-of-Sample
+    train_mask = df_b9_daily.index < split_date
+    test_mask  = df_b9_daily.index >= split_date
+
+    df_train = df_b9_daily[train_mask]
+    df_test  = df_b9_daily[test_mask]
+
+    # 4. Plotar a linha do modelo no Treino (Fina e cinzenta - In-Sample)
+    ax2.plot(
+        df_train.index, df_train["Predicted_Energy_kW"],
+        label="Modelo (Treino / In-Sample)", color="gray", linestyle="--", linewidth=1.5
+    )
+
+    # 5. Plotar o Forecast Verdadeiro (Forte e verde - Out-of-Sample)
+    ax2.plot(
+        df_test.index, df_test["Predicted_Energy_kW"],
+        label="Forecast (Teste / Out-of-Sample)", color="#27ae60", linestyle="--", linewidth=2.5
+    )
+
+    # 6. Adicionar a Banda de Incerteza APENAS na zona de Forecast
+    ax2.fill_between(
+        df_test.index,
+        df_test["Predicted_Energy_P10"],
+        df_test["Predicted_Energy_P90"],
+        color="#2ecc71", alpha=0.3,
+        label="Intervalo Confianca (+/-1.28 RMSE)",
+    )
+
+    # Linhas Divisorias de Epoca/Treino
+    ax2.axvline(pd.to_datetime("2025-05-01"),  color="black", linestyle="-", lw=1.5, label="Corte de Treino (80%)")
     ax2.axvline(pd.to_datetime("2025-05-15"),  color="gray", linestyle=":", alpha=0.7)
 
-    # Anotacoes de epoca: posicionadas dentro do eixo Y em vez de valor absoluto
+    # Anotacoes posicionadas dentro do eixo Y
     y_annot = ax2.get_ylim()[1] * 0.88 if ax2.get_ylim()[1] > 0 else 280
-    ax2.text(pd.to_datetime("2025-04-15"), y_annot, "Epoca 1\n(Golden Period)", ha="center", fontsize=8)
+    ax2.text(pd.to_datetime("2025-03-01"), y_annot, "ZONA DE TREINO\n(Epoca 1)", ha="center", fontsize=8, color="gray", fontweight="bold")
     ax2.text(pd.to_datetime("2025-05-07"), y_annot, "Epoca 2\n(-15%)",          ha="center", fontsize=8)
-    ax2.text(pd.to_datetime("2025-05-23"), y_annot, "Epoca 3\n(Anomalia)",      ha="center", fontsize=8)
+    ax2.text(pd.to_datetime("2025-05-23"), y_annot, "Epoca 3\n(Anomalia)",      ha="center", fontsize=8, color="#27ae60", fontweight="bold")
 
     ax2.set_title(
         "2. Previsao Probabilistica: Boia 9 (Real vs Esperado)",

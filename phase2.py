@@ -67,6 +67,8 @@ TARGET_COL       = "Energy_Generation_kW"
 # Comment out a feature to exclude it from the multi-dimensional analysis.
 INPUT_COLS       = [
     "Wave_Power_Flux", 
+    "Hs__m",
+    "Te__s",
     "NumberOfWaves"
 ]
 
@@ -448,55 +450,79 @@ def aggregate_and_plot(df_results: pd.DataFrame, df_raw: pd.DataFrame) -> pd.Dat
     # PLOT 2: Production Possibility Frontier (Output vs Input)
     # -----------------------------------------------------------------------
     # For visualization, we plot against the primary/first input feature
-    primary_input = INPUT_COLS[0]
-    
-    # Juntar os scores DEA com os valores brutos para poder plotar Input vs Output
+    cols_to_merge = [TIMESTAMP_COL, BUOY_ID_COL, TARGET_COL, "Epoch_Marker"] + INPUT_COLS
     df_frontier = pd.merge(
-        df_raw[[TIMESTAMP_COL, BUOY_ID_COL, primary_input, TARGET_COL, "Epoch_Marker"]],
+        df_raw[cols_to_merge],
         df_results,
         on=[TIMESTAMP_COL, BUOY_ID_COL],
         how="inner"
     )
     
-    # Focar na Época 3 (onde ocorre a degradação para se notar o efeito do DEA)
-    df_epoch3 = df_frontier[df_frontier["Epoch_Marker"] == 3]
+    # Focar na Época 3 para ver a anomalia
+    df_epoch3 = df_frontier[df_frontier["Epoch_Marker"] == 3].copy()
 
-    fig2, ax2 = plt.subplots(figsize=(10, 8))
+    # Gerar 1 Plot por cada Input
+    for i, input_col in enumerate(INPUT_COLS):
+        fig, ax = plt.subplots(figsize=(10, 8))
+        
+        sns.scatterplot(
+            data=df_epoch3, 
+            x=input_col, 
+            y=TARGET_COL, 
+            hue=BUOY_ID_COL, 
+            hue_order=EXPECTED_BUOYS,
+            palette=colors,
+            alpha=0.6,
+            s=40,
+            ax=ax
+        )
+
+        ax.set_title(f"DEA Fronteira 2D: Output vs {input_col} (Época 3)", fontweight='bold')
+        ax.set_xlabel(f"INPUT {i+1}: {input_col}")
+        ax.set_ylabel("OUTPUT: Geração de Energia Real (kW)")
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        
+        plt.tight_layout()
+        plt.savefig(f"wec_phase2_dea_frontier_{input_col}.png", dpi=150)
+        plt.close(fig)
+        logger.info("Saved Plot: wec_phase2_dea_frontier_%s.png", input_col)
+
+    # -----------------------------------------------------------------------
+    # PLOT N+1: O Pseudo 3D/4D (Input Agregado / "Proxy de Dimensão")
+    # -----------------------------------------------------------------------
+    # Para visualizar as 4 dimensões simultaneamente, criamos um índice de 
+    # "Severidade do Mar" agregando os inputs, normalizando-os.
+    # Isto ajuda a provar visualmente a multicolinearidade.
     
-    # Plotar todos os pontos da Época 3
+    df_epoch3["Aggregated_Input_Index"] = 0
+    for col in INPUT_COLS:
+        # Normalizar cada coluna entre 0 e 1 e somá-las
+        col_min = df_epoch3[col].min()
+        col_max = df_epoch3[col].max()
+        df_epoch3["Aggregated_Input_Index"] += (df_epoch3[col] - col_min) / (col_max - col_min)
+    
+    fig_agg, ax_agg = plt.subplots(figsize=(10, 8))
     sns.scatterplot(
         data=df_epoch3, 
-        x=primary_input, 
+        x="Aggregated_Input_Index", 
         y=TARGET_COL, 
         hue=BUOY_ID_COL, 
+        hue_order=EXPECTED_BUOYS,
         palette=colors,
         alpha=0.6,
         s=40,
-        ax=ax2
+        ax=ax_agg
     )
-
-    # Identificar e destacar a Fronteira Empírica (pontos onde DEA_Efficiency == 1)
-    #frontier_points = df_epoch3[df_epoch3["DEA_Efficiency"] >= 0.99]
-    #frontier_points = frontier_points.sort_values(by=primary_input)
     
-    #ax2.plot(
-    #    frontier_points[primary_input], 
-    #    frontier_points[TARGET_COL], 
-    #    color='black', 
-    #    linestyle='-', 
-    #    linewidth=1.5,
-    #    label="Fronteira de Eficiência (DEA = 1.0)",
-    #    zorder=10
-    #)
-
-    ax2.set_title("Data Envelopment Analysis: Fronteira de Produção (Época 3)", fontweight='bold')
-    ax2.set_xlabel(f"INPUT 1: {primary_input}")
-    ax2.set_ylabel("OUTPUT: Geração de Energia Real (kW)")
-    ax2.legend()
+    ax_agg.set_title("DEA Multidimensional: Output vs Inputs Agregados (Época 3)", fontweight='bold')
+    ax_agg.set_xlabel("Índice Agregado (Normalização Conjunta dos 4 Inputs)")
+    ax_agg.set_ylabel("OUTPUT: Geração de Energia Real (kW)")
+    ax_agg.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     
     plt.tight_layout()
-    plt.savefig("wec_phase2_dea_frontier.png", dpi=150)
-    plt.close(fig2)
+    plt.savefig("wec_phase2_dea_frontier_Aggregated.png", dpi=150)
+    plt.close(fig_agg)
+    logger.info("Saved Plot: wec_phase2_dea_frontier_Aggregated.png")
 
     return rolling
 
