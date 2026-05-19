@@ -75,7 +75,7 @@ INPUT_COLS       = [
 EXPECTED_BUOYS   = [f"Boia_{i}" for i in range(1, 13)]
 
 DATA_CSV_PATH    = "dataset2/wec_c5_mock_data_epochs.csv"
-PLOT_OUTPUT_PATH = "wec_phase2_dea.png"
+PLOT_OUTPUT_PATH = "plots/phase2_DEA/wec_phase2_dea.png"
 
 # Degradation injection parameters for Boia_3 (used in synthetic data only)
 DEGRADATION_START = "2025-05-01"
@@ -439,17 +439,12 @@ def aggregate_and_plot(df_results: pd.DataFrame, df_raw: pd.DataFrame) -> pd.Dat
     ax1.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
     
     plt.tight_layout()
-    plt.savefig("wec_phase2_dea_timeseries.png", dpi=150)
+    plt.savefig("plots/phase2_DEA/wec_phase2_dea_timeseries.png", dpi=150)
     plt.close(fig1)
 
     # -----------------------------------------------------------------------
     # PLOT 2: Production Possibility Frontier (Output vs Input)
     # -----------------------------------------------------------------------
-    # Juntar os scores DEA com os valores brutos para poder plotar Input vs Output
-    # -----------------------------------------------------------------------
-    # PLOT 2: Production Possibility Frontier (Output vs Input)
-    # -----------------------------------------------------------------------
-    # For visualization, we plot against the primary/first input feature
     cols_to_merge = [TIMESTAMP_COL, BUOY_ID_COL, TARGET_COL, "Epoch_Marker"] + INPUT_COLS
     df_frontier = pd.merge(
         df_raw[cols_to_merge],
@@ -458,71 +453,117 @@ def aggregate_and_plot(df_results: pd.DataFrame, df_raw: pd.DataFrame) -> pd.Dat
         how="inner"
     )
     
-    # Focar na Época 3 para ver a anomalia
+    # Focar estritamente na Época 3 para a análise visual da anomalia
     df_epoch3 = df_frontier[df_frontier["Epoch_Marker"] == 3].copy()
 
-    # Gerar 1 Plot por cada Input
-    for i, input_col in enumerate(INPUT_COLS):
-        fig, ax = plt.subplots(figsize=(10, 8))
-        
-        sns.scatterplot(
-            data=df_epoch3, 
-            x=input_col, 
-            y=TARGET_COL, 
-            hue=BUOY_ID_COL, 
-            hue_order=EXPECTED_BUOYS,
-            palette=colors,
-            alpha=0.6,
-            s=40,
-            ax=ax
-        )
+    # Calcular o Ponto Médio da Época 3 para cada boia
+    cols_to_agg = INPUT_COLS + [TARGET_COL]
+    df_agg_e3 = df_epoch3.groupby(BUOY_ID_COL)[cols_to_agg].mean().reset_index()
 
-        ax.set_title(f"DEA Fronteira 2D: Output vs {input_col} (Época 3)", fontweight='bold')
-        ax.set_xlabel(f"INPUT {i+1}: {input_col}")
-        ax.set_ylabel("OUTPUT: Geração de Energia Real (kW)")
-        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    # Encontrar um instante (timestamp) representativo a meio da Época 3
+    ts_counts = df_epoch3[TIMESTAMP_COL].value_counts()
+    valid_ts = ts_counts[ts_counts == len(EXPECTED_BUOYS)].index
+    chosen_ts = valid_ts[len(valid_ts) // 2] if len(valid_ts) > 0 else df_epoch3[TIMESTAMP_COL].iloc[0]
+    df_instant = df_epoch3[df_epoch3[TIMESTAMP_COL] == chosen_ts].copy()
+
+    # Gerar paleta de cores consistente
+    palette = sns.color_palette("husl", len(EXPECTED_BUOYS))
+    colors = {buoy: color for buoy, color in zip(EXPECTED_BUOYS, palette)}
+
+    # -----------------------------------------------------------------------
+    # OS N PLOTS (1 PARA CADA INPUT) -- Formato 1x3 (Nuvem | Instante | Média)
+    # -----------------------------------------------------------------------
+    for i, input_col in enumerate(INPUT_COLS):
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True, sharex=True)
         
+        # 1. ESQUERDA: A Nuvem de Pontos Total (Física / Saturação)
+        sns.scatterplot(
+            data=df_epoch3, x=input_col, y=TARGET_COL, 
+            hue=BUOY_ID_COL, hue_order=EXPECTED_BUOYS,
+            palette=colors, alpha=0.15, s=25, ax=axes[0], legend=False
+        )
+        axes[0].set_title(f"A. Distribuição Total (Época 3)", fontweight='bold')
+        axes[0].set_xlabel(f"INPUT {i+1}: {input_col}")
+        axes[0].set_ylabel("OUTPUT: Geração de Energia (kW)")
+
+        # 2. MEIO: O Instante Único (Prova de Ruído Comum)
+        sns.scatterplot(
+            data=df_instant, x=input_col, y=TARGET_COL, 
+            hue=BUOY_ID_COL, hue_order=EXPECTED_BUOYS,
+            palette=colors, alpha=1.0, s=180, edgecolor='black', linewidth=1.5, ax=axes[1], legend=False
+        )
+        ts_str = pd.to_datetime(chosen_ts).strftime("%Y-%m-%d %H:%M")
+        axes[1].set_title(f"B. Fotografia Instântanea ({ts_str})", fontweight='bold')
+        axes[1].set_xlabel(f"INPUT {i+1}: {input_col}")
+
+        # 3. DIREITA: O Ponto Médio (A Queda Vertical Estatística)
+        sns.scatterplot(
+            data=df_agg_e3, x=input_col, y=TARGET_COL, 
+            hue=BUOY_ID_COL, hue_order=EXPECTED_BUOYS,
+            palette=colors, alpha=1.0, s=250, marker="X", edgecolor='black', linewidth=1.5, ax=axes[2]
+        )
+        axes[2].set_title(f"C. Ponto de Operação Médio (Época 3)", fontweight='bold')
+        axes[2].set_xlabel(f"INPUT {i+1}: {input_col}")
+        
+        # Legenda Global à Direita
+        axes[2].legend(bbox_to_anchor=(1.05, 1), loc='upper left', title="Ativos")
+        
+        plt.suptitle(f"Análise Multiperspetiva: Output vs {input_col}", fontweight='bold', y=1.05, fontsize=15)
         plt.tight_layout()
-        plt.savefig(f"wec_phase2_dea_frontier_{input_col}.png", dpi=150)
+        plt.savefig(f"plots/phase2_DEA/wec_phase2_dea_frontier_{input_col}.png", dpi=150, bbox_inches='tight')
         plt.close(fig)
-        logger.info("Saved Plot: wec_phase2_dea_frontier_%s.png", input_col)
+        logger.info("Saved Plot: plots/phase2_DEA/wec_phase2_dea_frontier_%s.png", input_col)
 
     # -----------------------------------------------------------------------
     # PLOT N+1: O Pseudo 3D/4D (Input Agregado / "Proxy de Dimensão")
     # -----------------------------------------------------------------------
-    # Para visualizar as 4 dimensões simultaneamente, criamos um índice de 
-    # "Severidade do Mar" agregando os inputs, normalizando-os.
-    # Isto ajuda a provar visualmente a multicolinearidade.
+    df_epoch3["Aggregated_Input"] = 0
+    df_instant["Aggregated_Input"] = 0
+    df_agg_e3["Aggregated_Input"] = 0
     
-    df_epoch3["Aggregated_Input_Index"] = 0
     for col in INPUT_COLS:
-        # Normalizar cada coluna entre 0 e 1 e somá-las
-        col_min = df_epoch3[col].min()
-        col_max = df_epoch3[col].max()
-        df_epoch3["Aggregated_Input_Index"] += (df_epoch3[col] - col_min) / (col_max - col_min)
+        col_min, col_max = df_epoch3[col].min(), df_epoch3[col].max()
+        if col_max != col_min:
+            df_epoch3["Aggregated_Input"] += (df_epoch3[col] - col_min) / (col_max - col_min)
+            df_instant["Aggregated_Input"] += (df_instant[col] - col_min) / (col_max - col_min)
+            df_agg_e3["Aggregated_Input"] += (df_agg_e3[col] - col_min) / (col_max - col_min)
+            
+    fig_agg, axes_agg = plt.subplots(1, 3, figsize=(18, 6), sharey=True, sharex=True)
     
-    fig_agg, ax_agg = plt.subplots(figsize=(10, 8))
+    # 1. ESQUERDA: Agregado Total
     sns.scatterplot(
-        data=df_epoch3, 
-        x="Aggregated_Input_Index", 
-        y=TARGET_COL, 
-        hue=BUOY_ID_COL, 
-        hue_order=EXPECTED_BUOYS,
-        palette=colors,
-        alpha=0.6,
-        s=40,
-        ax=ax_agg
+        data=df_epoch3, x="Aggregated_Input", y=TARGET_COL, 
+        hue=BUOY_ID_COL, hue_order=EXPECTED_BUOYS,
+        palette=colors, alpha=0.15, s=25, ax=axes_agg[0], legend=False
     )
+    axes_agg[0].set_title("A. Distribuição Total (Época 3)", fontweight='bold')
+    axes_agg[0].set_xlabel("Índice Agregado (Normalização 4D)")
+    axes_agg[0].set_ylabel("OUTPUT: Geração de Energia (kW)")
+
+    # 2. MEIO: Agregado Instante
+    sns.scatterplot(
+        data=df_instant, x="Aggregated_Input", y=TARGET_COL, 
+        hue=BUOY_ID_COL, hue_order=EXPECTED_BUOYS,
+        palette=colors, alpha=1.0, s=180, edgecolor='black', linewidth=1.5, ax=axes_agg[1], legend=False
+    )
+    axes_agg[1].set_title(f"B. Fotografia Instântanea ({ts_str})", fontweight='bold')
+    axes_agg[1].set_xlabel("Índice Agregado (Normalização 4D)")
+
+    # 3. DIREITA: Agregado Médio
+    sns.scatterplot(
+        data=df_agg_e3, x="Aggregated_Input", y=TARGET_COL, 
+        hue=BUOY_ID_COL, hue_order=EXPECTED_BUOYS,
+        palette=colors, alpha=1.0, s=250, marker="X", edgecolor='black', linewidth=1.5, ax=axes_agg[2]
+    )
+    axes_agg[2].set_title("C. Ponto de Operação Médio (Época 3)", fontweight='bold')
+    axes_agg[2].set_xlabel("Índice Agregado (Normalização 4D)")
+    axes_agg[2].legend(bbox_to_anchor=(1.05, 1), loc='upper left', title="Ativos")
     
-    ax_agg.set_title("DEA Multidimensional: Output vs Inputs Agregados (Época 3)", fontweight='bold')
-    ax_agg.set_xlabel("Índice Agregado (Normalização Conjunta dos 4 Inputs)")
-    ax_agg.set_ylabel("OUTPUT: Geração de Energia Real (kW)")
-    ax_agg.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    
+    plt.suptitle("Análise Multidimensionalidade: Output vs Índice Agregado", fontweight='bold', y=1.05, fontsize=15)
     plt.tight_layout()
-    plt.savefig("wec_phase2_dea_frontier_Aggregated.png", dpi=150)
+    plt.savefig("plots/phase2_DEA/wec_phase2_dea_frontier_Aggregated.png", dpi=150, bbox_inches='tight')
     plt.close(fig_agg)
-    logger.info("Saved Plot: wec_phase2_dea_frontier_Aggregated.png")
+    logger.info("Saved Plot: plots/phase2_DEA/wec_phase2_dea_frontier_Aggregated.png")
 
     return rolling
 

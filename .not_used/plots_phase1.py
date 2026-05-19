@@ -189,8 +189,8 @@ def main():
     #    fontsize=13, fontweight="bold", y=1.0,
     #)
 
-    plt.savefig("wec_phase1_analysis.png", dpi=600, bbox_inches="tight")
-    print("Graficos guardados com sucesso em 'wec_phase1_analysis.png'!")
+    plt.savefig("plots/phase1/wec_phase1_analysis.png", dpi=600, bbox_inches="tight")
+    print("Graficos guardados com sucesso em 'plots/phase1/wec_phase1_analysis.png'!")
 
 if __name__ == "__main__":
     main()
