@@ -13,7 +13,100 @@ frontier is labelled as waste.  In a marine environment this is a serious
 flaw because random sea-state variation, sensor noise, and measurement
 error are genuinely symmetric and cannot be attributed to the asset.
 
-SFA addresses this by decomposing the composite residual into two
+SFA addresses thiOUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    epoch_df = df[df["Epoch_Marker"] == REPORT_EPOCH].copy()
+    if epoch_df.empty:
+        logger.warning(
+            "No Epoch %d data available; visualisation skipped.", REPORT_EPOCH
+        )
+        return
+
+    logger.info(
+        "Generating visualisation for Epoch %d: %d rows.", REPORT_EPOCH, len(epoch_df)
+    )
+
+    # Build pivot tables for both fleet groups
+    healthy_states = _build_state_pivot(epoch_df, HEALTHY_FLEET)
+    healthy_alarms = _build_alarm_pivot(epoch_df, HEALTHY_FLEET)
+    degraded_states = _build_state_pivot(epoch_df, DEGRADED_FLEET)
+    degraded_alarms = _build_alarm_pivot(epoch_df, DEGRADED_FLEET)
+
+    # Figure layout: 2 rows (healthy / degraded), 1 column
+    n_healthy = len(healthy_states.columns)
+    n_degraded = len(degraded_states.columns)
+    # Row height proportional to number of buoys; minimum 2 inches per panel
+    row_h_healthy = max(2.0, n_healthy * 0.55)
+    row_h_degraded = max(2.0, n_degraded * 0.55)
+
+    fig, axes = plt.subplots(
+        nrows=2,
+        ncols=1,
+        figsize=(18, row_h_healthy + row_h_degraded + 3),
+        gridspec_kw={"height_ratios": [n_healthy, n_degraded]},
+        facecolor="#1a1a2e",
+    )
+
+    for ax in axes:
+        ax.set_facecolor("#1a1a2e")
+
+    _draw_heatmap_panel(
+        axes[0],
+        healthy_states,
+        healthy_alarms,
+        f"Epoch {REPORT_EPOCH} - Healthy Fleet (Buoys 1-8) - Operational State Matrix",
+    )
+    _draw_heatmap_panel(
+        axes[1],
+        degraded_states,
+        degraded_alarms,
+        f"Epoch {REPORT_EPOCH} - Degraded Fleet (Buoys 9-12) - Operational State Matrix",
+    )
+
+    # Shared legend
+    legend_elements = [
+        Patch(facecolor=c, edgecolor="white", label=lbl)
+        for c, lbl in zip(STATE_COLORS, STATE_LABELS)
+    ]
+    legend_elements.append(
+        Patch(facecolor=ALARM_COLOR, alpha=0.75, edgecolor="white",
+              label="Maintenance Alarm Active")
+    )
+    fig.legend(
+        handles=legend_elements,
+        loc="lower center",
+        ncol=5,
+        fontsize=8.5,
+        framealpha=0.15,
+        facecolor="#2c2c54",
+        edgecolor="white",
+        labelcolor="white",
+        bbox_to_anchor=(0.5, 0.01),
+    )
+
+    # Global title
+    fig.suptitle(
+        f"WEC Phase 3 Decision Matrix  |  Epoch {REPORT_EPOCH}  |  "
+        "Healthy vs. Degraded Fleet Comparison",
+        fontsize=13,
+        fontweight="bold",
+        color="white",
+        y=0.99,
+    )
+
+    # Style axes text for dark background
+    for ax in axes:
+        ax.tick_params(colors="white")
+        ax.xaxis.label.set_color("white")
+        ax.yaxis.label.set_color("white")
+        ax.title.set_color("white")
+        for spine in ax.spines.values():
+            spine.set_edgecolor("#444466")
+
+    plt.tight_layout(rect=[0, 0.06, 1, 0.97])
+    fig.savefig(OUTPUT_PLOT, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    logger.info("Visualisation saved to: %s", OUTPUT_PLOT)s by decomposing the composite residual into two
 statistically distinct components:
 
     epsilon_i = v_i - u_i
@@ -118,6 +211,8 @@ DEGRADED_BUOYS: List[str] = [f"Boia_{i}" for i in range(9, 13)]
 ALL_BUOYS: List[str] = HEALTHY_BUOYS + DEGRADED_BUOYS
 
 PLOT_DIR: Path = Path("plots/phase2_SFA/")
+
+PHASE2_CSV_OUT: str = "dataset2/wec_phase2_outputs.csv"
 
 # Colour palette used consistently across all plots
 COLOR_HEALTHY: str = "#2471A3"
@@ -619,7 +714,9 @@ def plot_residual_decomposition(df: pd.DataFrame, save_path: str) -> None:
         if b in HEALTHY_BUOYS
         else "Degraded (Boias 9-12)"
     )
-    df_e3["u_hat"] = (-df_e3["mu_star"]).clip(lower=0)
+    df_e3["u_hat"] = df_e3["mu_star"].clip(lower=0)
+    
+    df_e3["v_hat"] = df_e3["epsilon"] + df_e3["u_hat"]
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
@@ -649,7 +746,7 @@ def plot_residual_decomposition(df: pd.DataFrame, save_path: str) -> None:
     rep_degraded: str = "Boia_9"
 
     for buoy, color, label, col_name in [
-        (rep_healthy,  COLOR_HEALTHY,  f"{rep_healthy} -- noise v (symmetric)",       "epsilon"),
+        (rep_healthy,  COLOR_HEALTHY,  f"{rep_healthy} -- noise v (symmetric)",       "v_hat"),
         (rep_degraded, COLOR_DEGRADED, f"{rep_degraded} -- inferred inefficiency u",  "u_hat"),
     ]:
         sub = df_e3[df_e3[BUOY_COL] == buoy]
@@ -862,7 +959,7 @@ def plot_triple_frontier(
     # Panel C: mean operating point per buoy
     # ------------------------------------------------------------------
     df_mean: pd.DataFrame = (
-        df_epoch.groupby(BUOY_COL)[[WPF_COL, TARGET_COL]]
+        df_epoch.groupby(BUOY_COL)[[WPF_COL, TARGET_COL, "Expected_Y_kW", "Generation_Deficit_kW", "SFA_Efficiency"]]
         .mean()
         .reindex(ALL_BUOYS)
         .dropna()
@@ -925,19 +1022,32 @@ def plot_triple_frontier(
             row = df_snap[df_snap[BUOY_COL] == buoy]
             if row.empty:
                 continue
+
+            x_val = row[WPF_COL].values[0]
+            y_val = row[TARGET_COL].values[0]
+            y_exp = row["Expected_Y_kW"].values[0]
+            deficit = row["Generation_Deficit_kW"].values[0]
+
+            if buoy in DEGRADED_BUOYS:
+                ax_b.vlines(x=x_val, ymin=y_val, ymax=y_exp, color=COLOR_DEGRADED, 
+                            linestyle='--', linewidth=1.5, zorder=5)
+                # Anotar visualmente a perda em kW
+                ax_b.text(x_val + 0.5, (y_val + y_exp) / 2, f"-{deficit:.0f} kW", 
+                          color=COLOR_DEGRADED, fontsize=7.5, fontweight="bold", va='center')
+
             ax_b.scatter(
-                row[WPF_COL].values,
-                row[TARGET_COL].values,
+                x_val, y_val,
                 color=_buoy_color(buoy),
                 s=120, alpha=0.92,
                 edgecolors="white", linewidths=0.8,
                 zorder=6, label=buoy,
             )
+            
             # Label each point with its buoy index for traceability
             buoy_idx: str = buoy.split("_")[-1]
             ax_b.annotate(
                 buoy_idx,
-                xy=(row[WPF_COL].values[0], row[TARGET_COL].values[0]),
+                xy=(x_val, y_val),
                 xytext=(3, 4), textcoords="offset points",
                 fontsize=6.5, color=_buoy_color(buoy), fontweight="bold",
             )
@@ -953,9 +1063,13 @@ def plot_triple_frontier(
     ax_c: plt.Axes = axes[2]
     _draw_frontier_overlay(ax_c, wpf_range, frontier_y, lower, upper, show_legend_label=False)
 
+    best_buoy = df_mean["SFA_Efficiency"].idxmax()
+    worst_buoy = df_mean["SFA_Efficiency"].idxmin()
+
     for buoy in df_mean.index:
         row_wpf: float = df_mean.loc[buoy, WPF_COL]
         row_y: float = df_mean.loc[buoy, TARGET_COL]
+
         ax_c.scatter(
             row_wpf, row_y,
             marker="X", color=_buoy_color(buoy),
@@ -963,13 +1077,36 @@ def plot_triple_frontier(
             edgecolors="white", linewidths=0.8,
             zorder=6, label=buoy,
         )
-        buoy_idx = buoy.split("_")[-1]
-        ax_c.annotate(
-            buoy_idx,
-            xy=(row_wpf, row_y),
-            xytext=(4, 4), textcoords="offset points",
-            fontsize=6.5, color=_buoy_color(buoy), fontweight="bold",
-        )
+
+        if buoy == worst_buoy:
+            deficit = df_mean.loc[buoy, "Generation_Deficit_kW"]
+            te = df_mean.loc[buoy, "SFA_Efficiency"]
+            bbox_props = dict(boxstyle="round,pad=0.3", fc="white", ec=COLOR_DEGRADED, lw=1.2, alpha=0.9)
+            ax_c.annotate(
+                f"Worst Asset ({buoy})\nTE: {te:.2f} | Deficit: -{deficit:.1f} kW",
+                xy=(row_wpf, row_y), xytext=(row_wpf + 2, row_y - 50),
+                arrowprops=dict(facecolor=COLOR_DEGRADED, shrink=0.05, width=1.5, headwidth=5),
+                fontsize=8, fontweight="bold", color=COLOR_DEGRADED, bbox=bbox_props, zorder=10
+            )
+            
+        elif buoy == best_buoy:
+            te = df_mean.loc[buoy, "SFA_Efficiency"]
+            bbox_props = dict(boxstyle="round,pad=0.3", fc="white", ec=COLOR_HEALTHY, lw=1.2, alpha=0.9)
+            ax_c.annotate(
+                f"Best Asset ({buoy})\nTE: {te:.2f}",
+                xy=(row_wpf, row_y), xytext=(row_wpf - 18, row_y + 40),
+                arrowprops=dict(facecolor=COLOR_HEALTHY, shrink=0.05, width=1.5, headwidth=5),
+                fontsize=8, fontweight="bold", color=COLOR_HEALTHY, bbox=bbox_props, zorder=10
+            )
+        else:
+            # Label normal para as restantes boias
+            buoy_idx = buoy.split("_")[-1]
+            ax_c.annotate(
+                buoy_idx,
+                xy=(row_wpf, row_y),
+                xytext=(4, 4), textcoords="offset points",
+                fontsize=6.5, color=_buoy_color(buoy), fontweight="bold",
+            )
 
     ax_c.set_title(panel_titles[2], fontsize=9, fontweight="bold")
     ax_c.set_xlabel("Wave Power Flux (WPF) [kW/m]", fontsize=9)
@@ -1125,6 +1262,34 @@ def print_degradation_report(df: pd.DataFrame) -> None:
     logger.info(separator)
     logger.info("")
 
+# ===========================================================================
+# Section 10 -- Artefact Export
+# ===========================================================================
+
+def export_artefacts(df: pd.DataFrame) -> None:
+    """
+    Export the data contract for Phase 3 (The Merge).
+    Only the essential columns required for the decision engine are saved
+    to minimize disk I/O and maintain a clean SCADA-like architecture.
+    """
+    logger.info("Exporting intermediate artefacts for Phase 3")
+    
+    export_cols = [
+        TIMESTAMP_COL,
+        BUOY_COL,
+        EPOCH_COL,
+        "SFA_Efficiency",
+        "Generation_Deficit_kW"
+    ]
+    
+    # Extract only the necessary columns
+    df_export = df[export_cols].copy()
+    
+    # Ensure directory exists and save
+    os.makedirs(os.path.dirname(PHASE2_CSV_OUT), exist_ok=True)
+    df_export.to_csv(PHASE2_CSV_OUT, index=False)
+    
+    logger.info("Phase 2 data contract exported to: %s", PHASE2_CSV_OUT)
 
 # ===========================================================================
 # Main Entry Point
@@ -1249,6 +1414,11 @@ def main() -> None:
         save_path=str(PLOT_DIR / "wec_phase2_sfa_triple_frontier.png"),
         epoch=3,
     )
+
+    # ------------------------------------------------------------------
+    # Stage 9 -- Export Artefacts 
+    # ------------------------------------------------------------------
+    export_artefacts(df)
 
     logger.info("Phase 2 SFA complete. Output files written to: %s", PLOT_DIR.resolve())
     logger.info("=" * 72)

@@ -43,6 +43,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import joblib
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from xgboost import XGBRegressor
@@ -65,6 +66,10 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 DATA_PATH: str = "dataset2/wec_c5_mock_data_epochs.csv"
 OUTPUT_PATH: str = "plots/phase1/wec_phase1_absolute.png"
+
+# ADICIONAR ESTAS DUAS LINHAS
+PHASE1_CSV_OUT: str = "dataset2/wec_phase1_outputs.csv"
+PHASE1_MODEL_OUT: str = "dataset2/wec_phase1_xgboost.joblib"
 
 TIMESTAMP_COL: str = "PCTimeStamp"
 TARGET_COL: str = "Energy_Generation_kW"
@@ -120,6 +125,12 @@ XGB_PARAMS: Dict = {
     "n_jobs": -1,
     "verbosity": 0,
 }
+
+# Definir os grupos de saúde das boias para a análise particionada
+HEALTHY_BUOYS: List[str] = [f"Boia_{i}" for i in range(1, 9)]
+DEGRADED_BUOYS: List[str] = [f"Boia_{i}" for i in range(9, 13)]
+ALL_BUOYS: List[str] = HEALTHY_BUOYS + DEGRADED_BUOYS
+
 
 # Matplotlib / Seaborn aesthetics
 plt.style.use("seaborn-v0_8-whitegrid")
@@ -262,16 +273,25 @@ def train_and_evaluate(
     model.fit(X_train, y_train)
     logger.info("Training complete.")
 
-    y_pred: np.ndarray = model.predict(X_test)
+    # 1. Avaliar In-Sample (O Comportamento "Normal" Base)
+    y_pred_train: np.ndarray = model.predict(X_train)
+    rmse_train: float = float(np.sqrt(mean_squared_error(y_train, y_pred_train)))
+    r2_train: float = float(r2_score(y_train, y_pred_train))
+    
+    # 2. Avaliar Out-of-Sample (Onde as anomalias vão aparecer)
+    y_pred_test: np.ndarray = model.predict(X_test)
+    rmse_test: float = float(np.sqrt(mean_squared_error(y_test, y_pred_test)))
+    mae_test: float = float(mean_absolute_error(y_test, y_pred_test))
+    r2_test: float = float(r2_score(y_test, y_pred_test))
 
-    rmse_test: float = float(np.sqrt(mean_squared_error(y_test, y_pred)))
-    mae_test: float = float(mean_absolute_error(y_test, y_pred))
-    r2_test: float = float(r2_score(y_test, y_pred))
-
-    logger.info("--- Test Set Metrics (Epoch B -- last 20 pct) ---")
-    logger.info("  RMSE : %.4f kW  [used dynamically throughout pipeline]", rmse_test)
+    logger.info("--- Baseline Metrics (In-Sample / Epoch 1) ---")
+    logger.info("  RMSE : %.4f kW", rmse_train)
+    logger.info("  R^2  : %.4f (Expected Healthy Behavior)", r2_train)
+    
+    logger.info("--- Global Test Set Metrics (Out-of-Sample) ---")
+    logger.info("  RMSE : %.4f kW  [used dynamically for anomalies]", rmse_test)
     logger.info("  MAE  : %.4f kW", mae_test)
-    logger.info("  R^2  : %.4f", r2_test)
+    logger.info("  R^2  : %.4f (Contaminated by anomalies)", r2_test)
     logger.info("-------------------------------------------------")
 
     importances: pd.Series = (
@@ -280,7 +300,9 @@ def train_and_evaluate(
     )
     logger.info("Top-5 feature importances:\n%s", importances.head(5).to_string())
 
-    return model, rmse_test
+    # Usamos o RMSE do treino (o comportamento verdadeiramente normal) 
+    # como a base da nossa banda de tolerância futura, que é muito mais rigoroso.
+    return model, rmse_train
 
 
 # ---------------------------------------------------------------------------
@@ -632,7 +654,28 @@ def emit_asset_performance_report(
     logger.info("Anomaly definition: Residual < -%.1f * RMSE_test", ANOMALY_SIGMA_FACTOR)
     logger.info(separator)
 
+    logger.info("--- R^2 Degradation Analysis (Epoch 3) ---")
+
+    mask_healthy = df_epoch[BUOY_ID_COL].isin(HEALTHY_BUOYS)
+    mask_degraded = df_epoch[BUOY_ID_COL].isin(DEGRADED_BUOYS)
+    
+    # Calcular o R2 apenas para as boias saudáveis nesta época
+    y_true_h = df_epoch[mask_healthy][TARGET_COL]
+    y_pred_h = df_epoch[mask_healthy]["Predicted_Energy_kW"]
+    r2_healthy = r2_score(y_true_h, y_pred_h) if not y_true_h.empty else np.nan
+    
+    # Calcular o R2 apenas para as boias degradadas nesta época
+    y_true_d = df_epoch[mask_degraded][TARGET_COL]
+    y_pred_d = df_epoch[mask_degraded]["Predicted_Energy_kW"]
+    r2_degraded = r2_score(y_true_d, y_pred_d) if not y_true_d.empty else np.nan
+    
+    logger.info("  Healthy Fleet R^2  : %.4f (Model retains accuracy)", r2_healthy)
+    logger.info("  Degraded Fleet R^2 : %.4f (Metric collapse confirms anomaly)", r2_degraded)
+    logger.info(separator)
+
+    # 2. O Relatório de Anomalias Absolutas Individual
     anomaly_rates: Dict[str, float] = {}
+
 
     for buoy in BUOY_ORDER:
         df_buoy: pd.DataFrame = df_epoch[df_epoch[BUOY_ID_COL] == buoy]
@@ -669,6 +712,43 @@ def emit_asset_performance_report(
 
 
 # ---------------------------------------------------------------------------
+# Stage H -- Artefact Export
+# ---------------------------------------------------------------------------
+anomaly_rates: Dict[str, float] = {}
+def export_artefacts(
+    df: pd.DataFrame, 
+    model: XGBRegressor, 
+    rmse_test: float
+) -> None:
+    """
+    Export the data contract for Phase 3 (The Merge) and serialize the 
+    trained XGBoost model for potential real-time deployment.
+    """
+    logger.info("Stage H -- Exporting intermediate artefacts")
+    
+    # 1. Export CSV (Data Contract)
+    export_cols = [
+        TIMESTAMP_COL,
+        BUOY_ID_COL,
+        "Predicted_Energy_kW",
+        "Absolute_Residual",
+        "Is_Absolute_Anomaly"
+    ]
+    df_export = df[export_cols].copy()
+    
+    # Broadcast the dynamic RMSE to all rows so Phase 3 can use it natively
+    df_export["RMSE_test_dynamic"] = rmse_test
+    
+    os.makedirs(os.path.dirname(PHASE1_CSV_OUT), exist_ok=True)
+    df_export.to_csv(PHASE1_CSV_OUT, index=False)
+    logger.info("Data contract exported to: %s", PHASE1_CSV_OUT)
+    
+    # 2. Export Model (.joblib)
+    joblib.dump(model, PHASE1_MODEL_OUT)
+    logger.info("Trained XGBoost model exported to: %s", PHASE1_MODEL_OUT)
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -697,6 +777,9 @@ def main() -> None:
 
     # Stage G
     emit_asset_performance_report(df, epoch=3)
+
+    # Stage H 
+    export_artefacts(df, model, rmse_test)
 
     logger.info("=" * 60)
     logger.info("Pipeline completed successfully.")
