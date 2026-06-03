@@ -15,8 +15,6 @@ State definitions:
     2 - Latent Degradation:        A=False, B=True
     3 - Critical Fault:            A=True,  B=True
 
-A 'Maintenance_Alarm' is raised when State 3 density across a 12-hour rolling
-window (24 half-hour periods) reaches or exceeds the configured threshold.
 """
 
 from __future__ import annotations
@@ -271,10 +269,8 @@ def generate_terminal_report(df: pd.DataFrame) -> None:
     """Log the O&M dispatch report for Epoch 3 to the terminal.
 
     For each Buoy_ID present in Epoch 3, reports:
-    - Total hours spent with Maintenance_Alarm == True.
     - Whether an O&M vessel dispatch is recommended.
 
-    Dispatch is recommended for any buoy with at least one alarm period.
 
     Parameters
     ----------
@@ -383,8 +379,6 @@ def _draw_heatmap_panel(
 ) -> None:
     """Render a single heatmap panel onto an Axes object.
 
-    The heatmap shows Operational_State (0-3) with the alarm overlay drawn
-    as semi-transparent hatching on cells where the alarm is active.
 
     Parameters
     ----------
@@ -392,8 +386,6 @@ def _draw_heatmap_panel(
         Matplotlib Axes to draw on.
     state_pivot:
         Pivot table of integer states (rows=time, columns=buoys).
-    alarm_pivot:
-        Pivot table of boolean alarm flags (same shape).
     title:
         Panel title string.
     """
@@ -549,7 +541,6 @@ def run_pipeline() -> pd.DataFrame:
         2. Inner-join on PCTimeStamp and Buoy_ID.
         3. Evaluate diagnostic conditions A and B.
         4. Assign instantaneous operational states (0-3).
-        5. Apply the 12-hour rolling alarm filter.
         6. Emit the O&M dispatch terminal report (Epoch 3).
         7. Generate and save the decision-matrix visualisation (Epoch 3).
 
