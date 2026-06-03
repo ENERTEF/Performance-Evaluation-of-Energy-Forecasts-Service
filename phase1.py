@@ -220,9 +220,11 @@ def temporal_split(
 
     X: pd.DataFrame = df[FEATURE_COLS].copy()
     y: pd.Series = df[TARGET_COL].copy()
+    buoys: pd.Series = df[BUOY_ID_COL].copy()
 
     X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
     y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
+    buoys_train, buoys_test = buoys.iloc[:split_idx], buoys.iloc[split_idx:]
 
     logger.info(
         "Stage B -- Temporal split: train=%d rows | test=%d rows (%.0f%% / %.0f%%)",
@@ -231,7 +233,7 @@ def temporal_split(
         (1.0 - test_fraction) * 100,
         test_fraction * 100,
     )
-    return X_train, y_train, X_test, y_test
+    return X_train, y_train, X_test, y_test, buoys_train, buoys_test
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +245,7 @@ def train_and_evaluate(
     y_train: pd.Series,
     X_test: pd.DataFrame,
     y_test: pd.Series,
+    buoys_test: pd.Series,
     params: Optional[Dict] = None,
 ) -> Tuple[XGBRegressor, float]:
     """
@@ -276,22 +279,48 @@ def train_and_evaluate(
     # 1. Avaliar In-Sample (O Comportamento "Normal" Base)
     y_pred_train: np.ndarray = model.predict(X_train)
     rmse_train: float = float(np.sqrt(mean_squared_error(y_train, y_pred_train)))
+    mae_train: float = float(mean_absolute_error(y_train, y_pred_train))
     r2_train: float = float(r2_score(y_train, y_pred_train))
     
-    # 2. Avaliar Out-of-Sample (Onde as anomalias vão aparecer)
+    # 2. Avaliar Out-of-Sample (Timeline: Ultimos 20% - Inclui anomalias da Epoch 3)
     y_pred_test: np.ndarray = model.predict(X_test)
-    rmse_test: float = float(np.sqrt(mean_squared_error(y_test, y_pred_test)))
-    mae_test: float = float(mean_absolute_error(y_test, y_pred_test))
-    r2_test: float = float(r2_score(y_test, y_pred_test))
+    rmse_test_global: float = float(np.sqrt(mean_squared_error(y_test, y_pred_test)))
+    mae_test_global: float = float(mean_absolute_error(y_test, y_pred_test))
+    r2_test_global: float = float(r2_score(y_test, y_pred_test))
 
-    logger.info("--- Baseline Metrics (In-Sample / Epoch 1) ---")
+    # Estratificacao Out-of-Sample: Saudaveis (1-8) vs Degradadas (9-12)
+    mask_healthy = buoys_test.isin(HEALTHY_BUOYS)
+    mask_degraded = buoys_test.isin(DEGRADED_BUOYS)
+
+    r2_test_healthy = r2_score(y_test[mask_healthy], y_pred_test[mask_healthy])
+    rmse_test_healthy = np.sqrt(mean_squared_error(y_test[mask_healthy], y_pred_test[mask_healthy]))
+    mae_test_healthy = float(mean_absolute_error(y_test[mask_healthy], y_pred_test[mask_healthy]))
+
+    r2_test_degraded = r2_score(y_test[mask_degraded], y_pred_test[mask_degraded])
+    rmse_test_degraded = np.sqrt(mean_squared_error(y_test[mask_degraded], y_pred_test[mask_degraded]))
+    mae_test_degraded = float(mean_absolute_error(y_test[mask_degraded], y_pred_test[mask_degraded]))
+
+    logger.info("--- Baseline Metrics (In-Sample / Epoch 1 / Train set) ---")
     logger.info("  RMSE : %.4f kW", rmse_train)
-    logger.info("  R^2  : %.4f (Expected Healthy Behavior)", r2_train)
+    logger.info("  MAE  : %.4f kW", mae_train)
+    logger.info("  R^2  : %.4f ", r2_train)
     
-    logger.info("--- Global Test Set Metrics (Out-of-Sample) ---")
-    logger.info("  RMSE : %.4f kW  [used dynamically for anomalies]", rmse_test)
-    logger.info("  MAE  : %.4f kW", mae_test)
-    logger.info("  R^2  : %.4f (Contaminated by anomalies)", r2_test)
+    logger.info("--- Global Test Set Metrics (Out-of-Sample / Test set) ---")
+    logger.info("  RMSE : %.4f kW ", rmse_test_global)
+    logger.info("  MAE  : %.4f kW", mae_test_global)
+    logger.info("  R^2  : %.4f ", r2_test_global)
+    logger.info("-------------------------------------------------")
+
+    logger.info("--- Healthy Test Set Metrics (Out-of-Sample / Test set) ---")
+    logger.info("  RMSE : %.4f kW ", rmse_test_healthy)
+    logger.info("  MAE  : %.4f kW", mae_test_healthy)
+    logger.info("  R^2  : %.4f ", r2_test_healthy)
+    logger.info("-------------------------------------------------")
+
+    logger.info("--- Degraded Test Set Metrics (Out-of-Sample / Test set) ---")
+    logger.info("  RMSE : %.4f kW  [used dynamically for anomalies]", rmse_test_degraded)
+    logger.info("  MAE  : %.4f kW", mae_test_degraded)
+    logger.info("  R^2  : %.4f ", r2_test_degraded)
     logger.info("-------------------------------------------------")
 
     importances: pd.Series = (
@@ -764,10 +793,10 @@ def main() -> None:
     df: pd.DataFrame = load_and_engineer_features(DATA_PATH)
 
     # Stage B
-    X_train, y_train, X_test, y_test = temporal_split(df)
+    X_train, y_train, X_test, y_test, buoys_train, buoys_test = temporal_split(df)
 
     # Stage C
-    model, rmse_test = train_and_evaluate(X_train, y_train, X_test, y_test)
+    model, rmse_test = train_and_evaluate(X_train, y_train, X_test, y_test, buoys_test)
 
     # Stages D + E
     df = run_inference_and_flag(df, model, rmse_test)

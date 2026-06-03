@@ -431,7 +431,6 @@ def _draw_heatmap_panel(
 
     return im
 
-
 def generate_visualisation(df: pd.DataFrame) -> None:
     """Produce and save the Phase 3 decision matrix visualisation.
 
@@ -472,11 +471,11 @@ def generate_visualisation(df: pd.DataFrame) -> None:
             ncols=1,
             figsize=(18, row_h_healthy + row_h_degraded + 3),
             gridspec_kw={"height_ratios": [n_healthy, n_degraded]},
-            facecolor="#1a1a2e",
+            facecolor="white",
         )
 
         for ax in axes:
-            ax.set_facecolor("#1a1a2e")
+            ax.set_facecolor("white")
 
         _draw_heatmap_panel(
             axes[0],
@@ -489,9 +488,9 @@ def generate_visualisation(df: pd.DataFrame) -> None:
             f"Epoch {epoch} - Degraded Fleet (Buoys 9-12) - Operational State Matrix",
         )
 
-        # Shared legend
+        # Shared legend formatted for light background
         legend_elements = [
-            Patch(facecolor=c, edgecolor="white", label=lbl)
+            Patch(facecolor=c, edgecolor="black", linewidth=1.0, label=lbl)
             for c, lbl in zip(STATE_COLORS, STATE_LABELS)
         ]
 
@@ -499,42 +498,44 @@ def generate_visualisation(df: pd.DataFrame) -> None:
             handles=legend_elements,
             loc="lower center",
             ncol=4,
-            fontsize=8.5,
-            framealpha=0.15,
-            facecolor="#2c2c54",
-            edgecolor="white",
-            labelcolor="white",
+            fontsize=9.5,
+            framealpha=0.9,
+            facecolor="white",
+            edgecolor="black",
+            labelcolor="black",
             bbox_to_anchor=(0.5, 0.01),
         )
 
-        # Global title
+        # Global title formatting for light background
         fig.suptitle(
             f"WEC Phase 3 Decision Matrix  |  Epoch {epoch}  |  "
             "Healthy vs. Degraded Fleet Comparison",
             fontsize=13,
             fontweight="bold",
-            color="white",
+            color="black",
             y=0.99,
         )
 
-        # Style axes text for dark background
+        # Style axes text and spines for light background
         for ax in axes:
-            ax.tick_params(colors="white")
-            ax.xaxis.label.set_color("white")
-            ax.yaxis.label.set_color("white")
-            ax.title.set_color("white")
+            ax.tick_params(colors="black")
+            ax.xaxis.label.set_color("black")
+            ax.yaxis.label.set_color("black")
+            ax.title.set_color("black")
             for spine in ax.spines.values():
-                spine.set_edgecolor("#444466")
+                spine.set_edgecolor("black")
+                spine.set_linewidth(1.0)
 
         plt.tight_layout(rect=[0, 0.06, 1, 0.97])
         
         # Dynamic output path based on the current epoch
         plot_path = OUTPUT_DIR / f"wec_phase3_decision_matrix_epoch_{epoch}.png"
-        fig.savefig(plot_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+        
+        # Export in high resolution suitable for academic publishing
+        fig.savefig(plot_path, dpi=300, bbox_inches="tight", facecolor=fig.get_facecolor())
         plt.close(fig)
         logger.info("Visualisation saved to: %s", plot_path)
-
-
+        
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------

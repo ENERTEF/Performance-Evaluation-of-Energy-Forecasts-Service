@@ -360,12 +360,12 @@ def fit_sfa_epoch1(df: pd.DataFrame) -> Dict:
         beta0, beta1, sigma2, lambda_, sigma_u2, sigma_v2, sigma_star2,
         converged (bool), nll (float)
     """
-    df_e1: pd.DataFrame = df[df[EPOCH_COL] == 1].copy()
+    df_e1: pd.DataFrame = df[(df[EPOCH_COL] == 1) & (df[TARGET_COL] < 345.0)].copy()
     ln_x: np.ndarray = df_e1["ln_wpf"].values
     ln_y: np.ndarray = df_e1["ln_y"].values
 
     logger.info(
-        "Fitting SFA on Epoch 1: %d observations from %d buoys",
+        "Fitting SFA on Epoch 1 Ramp-up Region: %d observations from %d buoys",
         len(ln_x),
         df_e1[BUOY_COL].nunique(),
     )
@@ -669,7 +669,7 @@ def plot_timeseries(
     ax.set_xlabel("Date", fontsize=11)
     ax.set_title(
         "WEC Phase 2 -- SFA Technical Efficiency: 7-Day Rolling Mean\n"
-        "Epoch 2: uniform environmental shift | Epoch 3: isolated PTO fault (Boias 9-12)",
+        "Epoch 2: Spectral Spreading Penalty | Epoch 3: isolated PTO fault (Boias 9-12)",
         fontsize=11, fontweight="bold",
     )
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
@@ -1185,7 +1185,7 @@ def print_degradation_report(df: pd.DataFrame) -> None:
         .unstack(EPOCH_COL)
         .rename(columns={
             1: "Epoch1_base",
-            2: "Epoch2_minus15",
+            2: "Epoch 2_Sub_optimal_Spectrum",
             3: "Epoch3_fault",
         })
     )
