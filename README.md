@@ -1,93 +1,262 @@
-# WEC
+# Performance Evaluation of Energy Forecasts Service
 
+Technical prototype for energy-production performance evaluation and anomaly detection.
 
+This repository is the current implementation artifact for the broader **Performance Evaluation of Energy Forecasts Service** described in the technical manual/specification. The business goal is to help analysts and operators evaluate forecast or expected-production quality, identify systematic errors, track performance over time, and improve future operational decisions.
 
-## Getting started
+In its **current code form**, this repository is not yet a deployed service API. It is an **offline analytical prototype** focused on **Wave Energy Converters (WECs)** using synthetic buoy data. The code evaluates production behaviour through a three-phase pipeline:
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+1. **Absolute performance modelling** with XGBoost
+2. **Relative efficiency analysis** with Stochastic Frontier Analysis (SFA)
+3. **Decision fusion** into operational states for maintenance/action support
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## Important Scope Note
 
-## Add your files
+The specification text refers to a production-grade service for energy forecast evaluation and also mentions PV portfolio use cases. The code in this folder currently implements a **WEC/buoy performance-evaluation prototype**, not an authenticated PV forecasting service.
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+That means this repository already demonstrates:
 
+- time-aligned analysis over energy-production data
+- residual/error-based performance assessment
+- systematic underperformance detection
+- traceable intermediate artifacts and plots
+
+It does **not** yet provide:
+
+- a REST or gRPC API
+- authentication or authorization
+- production deployment manifests
+- real measured-vs-forecast service endpoints
+- automated test coverage or CI packaging
+
+## What The Prototype Does
+
+The prototype analyses a fleet of **12 buoys/WECs** over three operating epochs using a synthetic SCADA-like dataset.
+
+- **Phase 1** learns an expected production baseline from environmental and temporal features, then flags large negative residuals as absolute anomalies.
+- **Phase 2** fits a stochastic production frontier on a healthy reference period and estimates technical efficiency plus generation deficit.
+- **Phase 3** merges both views into a decision matrix that distinguishes environmental false positives from likely mechanical degradation.
+
+This makes the repository useful as a research/technical baseline for a future production service concerned with forecast/performance evaluation, explainability, and O&M decision support.
+
+## Repository Structure
+
+```text
+.
+|-- README.md
+|-- performance_evaluation.ipynb
+|-- phase1.py
+|-- phase1.ipynb
+|-- phase2_SFA.py
+|-- phase2_SFA.ipynb
+|-- phase3.py
+|-- phase3.ipynb
+|-- dataset2/
+|   |-- wec_c5_mock_data_epochs.csv
+|   |-- wec_phase1_outputs.csv
+|   |-- wec_phase1_xgboost.joblib
+|   |-- wec_phase2_outputs.csv
+|   `-- create_synt_dataset.py
+|-- plots/
+|   |-- phase1/
+|   |-- phase2_SFA/
+|   `-- phase3_merge/
+`-- .not_used/
 ```
-cd existing_repo
-git remote add origin https://gitlab.inesctec.pt/daniel.f.costa/wec.git
-git branch -M main
-git push -uf origin main
-```
 
-## Integrate with your tools
+## Pipeline Overview
 
-* [Set up project integrations](https://gitlab.inesctec.pt/daniel.f.costa/wec/-/settings/integrations)
+### Phase 1: Absolute Performance Analysis
 
-## Collaborate with your team
+Implemented in [phase1.py](phase1.py).
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+Purpose:
 
-## Test and Deploy
+- load the synthetic fleet dataset
+- engineer wave and temporal features
+- train an `XGBRegressor`
+- predict expected energy generation
+- compute residuals against measured generation
+- flag absolute anomalies using a dynamic RMSE-based threshold
+- export a data contract for later fusion
 
-Use the built-in continuous integration in GitLab.
+Main outputs:
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+- `dataset2/wec_phase1_outputs.csv`
+- `dataset2/wec_phase1_xgboost.joblib`
+- `plots/phase1/wec_phase1_absolute.png`
 
-***
+Key exported columns:
 
-# Editing this README
+- `PCTimeStamp`
+- `Buoy_ID`
+- `Predicted_Energy_kW`
+- `Absolute_Residual`
+- `Is_Absolute_Anomaly`
+- `RMSE_test_dynamic`
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+### Phase 2: Stochastic Frontier Analysis
 
-## Suggestions for a good README
+Implemented in [phase2_SFA.py](phase2_SFA.py).
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+Purpose:
 
-## Name
-Choose a self-explaining name for your project.
+- estimate a technical-efficiency frontier from a healthy reference epoch
+- separate symmetric noise from one-sided inefficiency
+- quantify degradation more robustly than residuals alone
+- compute rolling efficiency views and generation deficits
+- export a second data contract for the decision engine
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+Main outputs:
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+- `dataset2/wec_phase2_outputs.csv`
+- `plots/phase2_SFA/wec_phase2_SFA_sfa_timeseries.png`
+- `plots/phase2_SFA/wec_phase2_SFA_sfa_residuals.png`
+- `plots/phase2_SFA/wec_phase2_sfa_triple_frontier.png`
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+Key exported columns:
+
+- `PCTimeStamp`
+- `Buoy_ID`
+- `Epoch_Marker`
+- `SFA_Efficiency`
+- `Generation_Deficit_kW`
+
+### Phase 3: Decision Engine
+
+Implemented in [phase3.py](phase3.py).
+
+Purpose:
+
+- merge Phase 1 and Phase 2 outputs
+- evaluate two diagnostic conditions:
+  - absolute underperformance
+  - relative efficiency degradation
+- assign each observation to an operational state
+- generate O&M-oriented reports and decision-matrix plots
+
+Operational states:
+
+| State | Meaning |
+|---|---|
+| 0 | Nominal |
+| 1 | Environmental False Positive |
+| 2 | Latent Degradation |
+| 3 | Critical Fault |
+
+Main outputs:
+
+- `plots/phase3_merge/wec_phase3_decision_matrix_epoch_2.png`
+- `plots/phase3_merge/wec_phase3_decision_matrix_epoch_3.png`
+
+## Data
+
+The repository includes a synthetic dataset at `dataset2/wec_c5_mock_data_epochs.csv`.
+
+Dataset characteristics:
+
+- 12 wave-energy buoys (`Boia_1` to `Boia_12`)
+- 30-minute resolution
+- timestamps from January to May 2025
+- environmental variables such as `Hs__m` and `Te__s`
+- energy output target `Energy_Generation_kW`
+- operating-period label `Epoch_Marker`
+
+The epochs are used as scenario markers:
+
+- **Epoch 1**: healthy/golden reference period
+- **Epoch 2**: fleet-wide sub-optimal environmental conditions
+- **Epoch 3**: separation between healthy and degraded assets
+
+The helper script `dataset2/create_synt_dataset.py` can be used to regenerate mock data, although the repository already contains the dataset needed by the pipeline. If you use the generator as-is, run it with care around the working directory or adjust its output path so the CSV lands in `dataset2/`.
 
 ## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+No `requirements.txt` is currently included, so dependencies must be installed manually.
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+Recommended environment:
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+- Python 3.10+
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+Suggested packages:
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+```bash
+pip install numpy pandas matplotlib seaborn scipy scikit-learn xgboost joblib jupyter
+```
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+## How To Run
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+Run the three phases in order from the repository root:
 
-## License
-For open source projects, say how it is licensed.
+```bash
+python phase1.py
+python phase2_SFA.py
+python phase3.py
+```
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Optional:
+
+- use the notebooks for exploratory analysis and presentation material
+- inspect `plots/` after each phase completes
+- inspect `dataset2/wec_phase1_outputs.csv` and `dataset2/wec_phase2_outputs.csv` as the intermediate data contracts
+
+## Expected Workflow
+
+1. Phase 1 creates the expected-production baseline and anomaly flags.
+2. Phase 2 estimates efficiency and generation deficit.
+3. Phase 3 fuses both signals into operational states and visual decision outputs.
+
+This sequencing is important because Phase 3 depends on the CSV artifacts produced by Phases 1 and 2.
+
+## Current Status
+
+This repository should currently be understood as a **research/prototype codebase**, not a finished production service.
+
+Strengths already present:
+
+- clear analytical separation across three phases
+- reproducible local execution from raw CSV to plots
+- intermediate CSV artifacts that behave like internal data contracts
+- interpretable outputs for technical review
+
+Current limitations:
+
+- WEC-specific implementation rather than a generic energy-service abstraction
+- synthetic dataset rather than production telemetry and forecast feeds
+- no API surface for external consumers
+- no configuration layer for multi-tenant/site-level operation
+- no test suite, packaging, containerization, or deployment automation
+- no monitoring, audit API, or model registry workflow
+
+## How This Maps To The Service Vision
+
+The specification describes a service that evaluates forecast quality by comparing forecasted and measured production over time. This repository partially supports that vision by already providing:
+
+- time-series ingestion and alignment
+- model-based expected-production benchmarking
+- error/residual analysis
+- performance tracking across operating periods
+- explainable decision outputs for analysts
+
+To evolve this prototype into the intended production service, typical next steps would be:
+
+1. replace synthetic WEC data with real forecast and measured production feeds
+2. externalize configuration for asset/site definitions and evaluation windows
+3. wrap the pipeline in an authenticated API
+4. add validation, tests, observability, and deployment packaging
+5. generalize the domain model to PV/offshore/other energy assets as required
+
+## Intended Audience
+
+This repository is most useful for:
+
+- data scientists validating the methodology
+- energy analysts reviewing degradation logic
+- software engineers preparing a service implementation
+- stakeholders who need a concrete technical baseline from the written specification
+
+## Summary
+
+If you are looking for a **production service**, this repository is the starting point, not the final product.
+
+If you are looking for the **current technical implementation**, this folder contains a coherent three-phase prototype for analysing energy-production behaviour, detecting systematic underperformance, and generating decision-support artifacts for a wave-energy fleet.
