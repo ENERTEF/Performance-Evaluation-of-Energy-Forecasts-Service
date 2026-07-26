@@ -4,7 +4,7 @@ Technical prototype for energy-production performance evaluation and anomaly det
 
 This repository is the current implementation artifact for the broader **Performance Evaluation of Energy Forecasts Service** described in the technical manual/specification. The business goal is to help analysts and operators evaluate forecast or expected-production quality, identify systematic errors, track performance over time, and improve future operational decisions.
 
-In its **current code form**, this repository is not yet a deployed service API. It is an **offline analytical prototype** focused on **Wave Energy Converters (WECs)** using synthetic buoy data. The code evaluates production behaviour through a three-phase pipeline:
+In its **current code form**, this repository is an **offline analytical prototype** focused on **Wave Energy Converters (WECs)**. It processes both legacy synthetic data and advanced semi-empirical data anchored on real offshore telemetry. The code evaluates production behaviour through a three-phase pipeline:
 
 1. **Absolute performance modelling** with XGBoost
 2. **Relative efficiency analysis** with Stochastic Frontier Analysis (SFA)
@@ -17,7 +17,9 @@ The specification text refers to a production-grade service for energy forecast 
 That means this repository already demonstrates:
 
 - time-aligned analysis over energy-production data
-- residual/error-based performance assessment
+- strict avoidance of temporal data leakage
+- handling of real-world telemetry gaps (hard-drop policies)
+- residual/error-based performance assessment combined with stochastic frontiers
 - systematic underperformance detection
 - traceable intermediate artifacts and plots
 
@@ -31,13 +33,13 @@ It does **not** yet provide:
 
 ## What The Prototype Does
 
-The prototype analyses a fleet of **12 buoys/WECs** over three operating epochs using a synthetic SCADA-like dataset.
+The prototype analyses a fleet of **12 buoys/WECs** over three operating epochs.
 
-- **Phase 1** learns an expected production baseline from environmental and temporal features, then flags large negative residuals as absolute anomalies.
-- **Phase 2** fits a stochastic production frontier on a healthy reference period and estimates technical efficiency plus generation deficit.
-- **Phase 3** merges both views into a decision matrix that distinguishes environmental false positives from likely mechanical degradation.
+- **Phase 1** learns an expected production baseline from environmental features exclusively (avoiding calendar seasonality bias). It utilizes a metadata-driven "Golden Window" for training and flags large negative residuals (-3 sigma) as absolute anomalies.
+- **Phase 2** fits a stochastic production frontier on a healthy reference period. It maps spatial attenuation (wake effects) and separates symmetric environmental noise from one-sided mechanical inefficiency, estimating actual generation deficits.
+- **Phase 3** merges both views into a decision matrix that distinguishes environmental false positives (e.g., sub-optimal wave spectra) from verified mechanical PTO degradation.
 
-This makes the repository useful as a research/technical baseline for a future production service concerned with forecast/performance evaluation, explainability, and O&M decision support.
+
 
 ## Repository Structure
 
@@ -46,15 +48,8 @@ This makes the repository useful as a research/technical baseline for a future p
 |-- README.md
 |-- requirements.txt
 |-- performance_evaluation.ipynb
-|-- phase1.ipynb
-|-- phase2_SFA.ipynb
-|-- phase3.ipynb
+|-- dataset1/
 |-- dataset2/
-|   |-- wec_c5_mock_data_epochs.csv
-|   |-- wec_phase1_outputs.csv
-|   |-- wec_phase1_xgboost.joblib
-|   |-- wec_phase2_outputs.csv
-|   `-- create_synt_dataset.py
 `-- plots/
     |-- phase1/
     |-- phase2_SFA/
@@ -65,72 +60,59 @@ This makes the repository useful as a research/technical baseline for a future p
 
 ### Phase 1: Absolute Performance Analysis
 
-Implemented in `performance_evaluation.ipynb` (or individually in `phase1.ipynb`).
+Implemented in `performance_evaluation.ipynb`.
 
 Purpose:
 
-- load the synthetic fleet dataset
-- engineer wave and temporal features
-- train an `XGBRegressor`
+- load the fleet dataset (handling real sensor gaps via `IGNORE` metadata)
+- engineer wave features while excluding pure temporal variables
+- train an `XGBRegressor` on a guaranteed healthy baseline (`Split_Role == TRAIN`)
 - predict expected energy generation
 - compute residuals against measured generation
-- flag absolute anomalies using a dynamic RMSE-based threshold
+- flag absolute anomalies using a strict Statistical Process Control limit (`-3 * RMSE_train`)
 - export a data contract for later fusion
 
 Main outputs:
 
-- `dataset2/wec_phase1_outputs.csv`
-- `dataset2/wec_phase1_xgboost.joblib`
+- `[dataset_dir]/wec_phase1_outputs.csv`
+- `[dataset_dir]/wec_phase1_xgboost.joblib`
 - `plots/phase1/wec_phase1_absolute.png`
 
-Key exported columns:
-
-- `PCTimeStamp`
-- `Buoy_ID`
-- `Predicted_Energy_kW`
-- `Absolute_Residual`
-- `Is_Absolute_Anomaly`
-- `RMSE_test_dynamic`
 
 ### Phase 2: Stochastic Frontier Analysis
 
-Implemented in `performance_evaluation.ipynb` (or individually in `phase2_SFA.ipynb`).
+Implemented in `performance_evaluation.ipynb`.
 
 Purpose:
 
 - estimate a technical-efficiency frontier from a healthy reference epoch
-- separate symmetric noise from one-sided inefficiency
-- quantify degradation more robustly than residuals alone
+- separate symmetric noise (environmental shifts) from one-sided inefficiency (asset faults)
+- quantify degradation more robustly than absolute residuals alone
 - compute rolling efficiency views and generation deficits
 - export a second data contract for the decision engine
 
 Main outputs:
 
-- `dataset2/wec_phase2_outputs.csv`
+- `[dataset_dir]/wec_phase2_outputs.csv`
 - `plots/phase2_SFA/wec_phase2_SFA_sfa_timeseries.png`
 - `plots/phase2_SFA/wec_phase2_SFA_sfa_residuals.png`
-- `plots/phase2_SFA/wec_phase2_sfa_triple_frontier.png`
+- `plots/phase2_SFA/wec_phase2_sfa_triple_frontier_epoch1.png`
+- `plots/phase2_SFA/wec_phase2_sfa_triple_frontier_epoch2.png`
+- `plots/phase2_SFA/wec_phase2_sfa_triple_frontier_epoch3.png`
 
-Key exported columns:
-
-- `PCTimeStamp`
-- `Buoy_ID`
-- `Epoch_Marker`
-- `SFA_Efficiency`
-- `Generation_Deficit_kW`
 
 ### Phase 3: Decision Engine
 
-Implemented in `performance_evaluation.ipynb` (or individually in `phase3.ipynb`).
+Implemented in `performance_evaluation.ipynb`.
 
-Purpose:
+**Purpose:**
 
 - merge Phase 1 and Phase 2 outputs
 - evaluate two diagnostic conditions:
-  - absolute underperformance
-  - relative efficiency degradation
+  - absolute underperformance (Phase 1)
+  - relative efficiency degradation (Phase 2)
 - assign each observation to an operational state
-- generate O&M-oriented reports and decision-matrix plots
+- generate O&M-oriented reports and decision-matrix plots for Epochs 1, 2, and 3
 
 Operational states:
 
@@ -143,29 +125,29 @@ Operational states:
 
 Main outputs:
 
+- `plots/phase3_merge/wec_phase3_decision_matrix_epoch_1.png`
 - `plots/phase3_merge/wec_phase3_decision_matrix_epoch_2.png`
 - `plots/phase3_merge/wec_phase3_decision_matrix_epoch_3.png`
 
+
 ## Data
 
-The repository includes a synthetic dataset at `dataset2/wec_c5_mock_data_epochs.csv`.
+The repository supports two distinct data paradigms, managed via dynamic path detection in the code:
 
-Dataset characteristics:
+**1. Semi-Empirical Dataset (`dataset1/`)**
+A highly realistic dataset anchored on real Waverider buoy telemetry (March–June 2026). To simulate a wave farm environment, spatial attenuation factors (wake effects) were applied directly to the significant wave height ($H_s$), alongside the injection of natural oceanic noise. It utilizes strict metadata tagging (`Split_Role`) to handle unrecoverable sensor gaps (`IGNORE`) and enforce robust train/test boundaries without chronological leakage.
 
-- 12 wave-energy buoys (`Buoy 1` to `Buoy 12`)
-- 30-minute resolution
-- timestamps from January to May 2025
-- environmental variables such as `Hs__m` and `Te__s`
-- energy output target `Energy_Generation_kW`
-- operating-period label `Epoch_Marker`
 
-The epochs are used as scenario markers:
+**2. Legacy Synthetic Dataset (`dataset2/`)**
+
+The original synthetic dataset used for early methodology validation. It uses a standard chronological 80/20 train/test split.
+
+**Operating Epochs (Scenarios):**
 
 - **Epoch 1**: healthy/golden reference period
 - **Epoch 2**: fleet-wide sub-optimal environmental conditions
-- **Epoch 3**: separation between healthy and degraded assets
+- **Epoch 3**: Isolated mechanical PTO faults in specific assets (Buoys 9-12).
 
-The helper script `dataset2/create_synt_dataset.py` can be used to regenerate mock data, although the repository already contains the dataset needed by the pipeline. If you use the generator as-is, run it with care around the working directory or adjust its output path so the CSV lands in `dataset2/`.
 
 ## Installation
 
@@ -183,29 +165,8 @@ pip install -r requirements.txt
 
 ## How To Run
 
-You can run the full pipeline or execute the phases individually using Jupyter Notebooks.
+The entire pipeline is unified. Open and execute all cells sequentially in `performance_evaluation.ipynb`.
 
-**Option A: Run the entire pipeline**
+To toggle between the semi-empirical dataset and the legacy synthetic dataset, simply change the active data directory path variable at the top of each phase.
 
-Open and run all cells in `performance_evaluation.ipynb`. This notebook contains Phase 1, Phase 2, and Phase 3 unified in a single flow.
-
-**Option B: Run phases individually**
-
-If you prefer to run the steps separately, execute the notebooks in the following order:
-
-1. `phase1.ipynb`
-2. `phase2_SFA.ipynb`
-3. `phase3.ipynb`
-
-Optional:
-
-- inspect `plots/` after each phase completes
-- inspect `dataset2/wec_phase1_outputs.csv` and `dataset2/wec_phase2_outputs.csv` as the intermediate data contracts
-
-## Expected Workflow
-
-1. Phase 1 creates the expected-production baseline and anomaly flags.
-2. Phase 2 estimates efficiency and generation deficit.
-3. Phase 3 fuses both signals into operational states and visual decision outputs.
-
-This sequencing is important because Phase 3 depends on the CSV artifacts produced by Phases 1 and 2.
+The pipeline will automatically adapt its internal splitting and export logic based on the provided path, generating all intermediate artifacts and plots for Phase 1, 2, and 3.
